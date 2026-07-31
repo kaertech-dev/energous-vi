@@ -1,8 +1,7 @@
 from flask import Blueprint, request, jsonify, session, render_template
 from app.auth import authenticate_operator
-from app.scan import process_scan
 from app.config import Config
-from app.scan import process_scan, process_prog_check
+from app.scan import process_prog_check, finalize_scan, validate_scan
 
 scan_bp = Blueprint("scan", __name__)
 
@@ -71,7 +70,7 @@ def api_check_prog():
     result = process_prog_check(prog_id)
     return jsonify(result)
 
-# ── Scan API (step 2) ────────────────────────────────────────────────────────
+# ── Serial validation (step 2) ───────────────────────────────────────────────
 
 @scan_bp.route("/api/scan", methods=["POST"])
 def api_scan():
@@ -81,19 +80,43 @@ def api_scan():
     data = request.get_json(force=True)
     prog_id    = (data.get("prog_id") or "").strip()
     serial_num = (data.get("serial_num") or "").strip()
-    shift      = (data.get("shift") or "").strip()
-    remarks    = (data.get("remarks") or "").strip()
 
     if not prog_id:
         return jsonify({"ok": False, "message": "Prog ID must be verified first."}), 400
     if not serial_num:
         return jsonify({"ok": False, "message": "Serial number is required."}), 400
 
-    result = process_scan(
+    result = validate_scan(prog_id, serial_num)
+    ok = result["status"] == "ok"
+    return jsonify({"ok": ok, **result})
+
+# ── Pass / Fail decision (step 3) ────────────────────────────────────────────
+
+@scan_bp.route("/api/scan-decision", methods=["POST"])
+def api_scan_decision():
+    if "operator_en" not in session:
+        return jsonify({"ok": False, "message": "Not authenticated."}), 401
+
+    data = request.get_json(force=True)
+    prog_id    = (data.get("prog_id") or "").strip()
+    serial_num = (data.get("serial_num") or "").strip()
+    decision   = (data.get("decision") or "").strip().lower()
+    shift      = (data.get("shift") or "").strip()
+    remarks    = (data.get("remarks") or "").strip()
+
+    if not prog_id or not serial_num:
+        return jsonify({"ok": False, "message": "Prog ID and serial number are required."}), 400
+    if decision not in ("pass", "fail"):
+        return jsonify({"ok": False, "message": "Decision must be 'pass' or 'fail'."}), 400
+    if decision == "fail" and not remarks:
+        return jsonify({"ok": False, "message": "Please enter a fail reason."}), 400
+
+    result = finalize_scan(
         prog_id=prog_id,
         serial_num=serial_num,
         operator_en=session["operator_en"],
         shift=shift,
+        decision=decision,
         remarks=remarks,
     )
 
