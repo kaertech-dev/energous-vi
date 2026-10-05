@@ -42,7 +42,7 @@ def verify_prog_matches_serial(prog_id: str, serial_num: str) -> bool:
 
 def already_packed(serial_num: str) -> bool:
     row = query_one(
-        "SELECT serial_num FROM energous.esense_vi_copy WHERE serial_num = %s LIMIT 1",
+        "SELECT serial_num FROM energous.esense_vi WHERE serial_num = %s LIMIT 1",
         (serial_num,)
     )
     return row is not None
@@ -56,7 +56,7 @@ def record_packing(serial_num: str, po_num: str, operator_en: str, shift: str, r
     """
     Atomically:
       1. Set vi=1 in esense_main
-      2. Insert a row into esense_vi_copy (status=1, test_rep=1)
+      2. Insert a row into esense_vi (status=1, test_rep=1)
     Used for PASS.
     """
     conn = get_conn()
@@ -74,7 +74,7 @@ def record_packing(serial_num: str, po_num: str, operator_en: str, shift: str, r
 
         cur.execute(
             """
-            INSERT INTO energous.esense_vi_copy
+            INSERT INTO energous.esense_vi
                 (serial_num, po_num, operator_en, shift, date_time, test_rep, remarks, status)
             VALUES (%s, %s, %s, %s, %s, 1, %s, 1)
             """,
@@ -92,7 +92,7 @@ def record_packing(serial_num: str, po_num: str, operator_en: str, shift: str, r
 def record_fail(serial_num: str, po_num: str, operator_en: str, shift: str, reason: str):
     """
     Record a FAIL:
-      - Inserts into esense_vi_copy with serial_num suffixed "_1"
+      - Inserts into esense_vi with serial_num suffixed "_1"
       - status = 0, remarks = reason
       - esense_main.vi is NOT touched (unit isn't considered packed,
         so it can be reworked and re-scanned under its original serial).
@@ -103,7 +103,7 @@ def record_fail(serial_num: str, po_num: str, operator_en: str, shift: str, reas
         cur = conn.cursor()
         cur.execute(
             """
-            INSERT INTO energous.esense_vi_copy
+            INSERT INTO energous.esense_vi
                 (serial_num, po_num, operator_en, shift, date_time, test_rep, remarks, status)
             VALUES (%s, %s, %s, %s, %s, 1, %s, 0)
             """,
