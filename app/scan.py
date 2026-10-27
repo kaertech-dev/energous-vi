@@ -43,7 +43,7 @@ def verify_prog_matches_serial(prog_id: str, serial_num: str) -> bool:
 
 def already_packed(serial_num: str) -> bool:
     row = query_one(
-        "SELECT serial_num FROM energous.esense_vi WHERE serial_num = %s LIMIT 1",
+        "SELECT serial_num, status FROM energous.esense_vi WHERE status =  1 AND serial_num = %s LIMIT 1",
         (serial_num,)
     )
     return row is not None
@@ -88,13 +88,43 @@ def stations_passed(row: dict) -> bool:
 def record_packing(serial_num: str, po_num: str, operator_en: str, shift: str, remarks: str = ""):
     """
     Atomically:
-      1. Set vi=1 in esense_main
-      2. Insert a row into esense_vi (status=1, test_rep=1)
+      - Set status=1 on an existing failed esense_vi row, changing no other fields
+      - Otherwise set vi=1 in esense_main and insert a new esense_vi row
     Used for PASS.
     """
     conn = get_conn()
     try:
         cur = conn.cursor()
+
+        cur.execute(
+            """
+            SELECT status
+            FROM energous.esense_vi
+            WHERE serial_num = %s
+            LIMIT 1
+            FOR UPDATE
+            """,
+            (serial_num,)
+        )
+        existing = cur.fetchone()
+        if existing:
+            if existing["status"] == 0:
+                cur.execute(
+                    """
+                    UPDATE energous.esense_vi
+                    SET status = 1
+                    WHERE serial_num = %s AND status = 0
+                    """,
+                    (serial_num,)
+                )
+                if cur.rowcount != 1:
+                    conn.rollback()
+                    return False
+            else:
+                conn.rollback()
+                return False
+            conn.commit()
+            return True
 
         cur.execute(
             """
@@ -115,6 +145,7 @@ def record_packing(serial_num: str, po_num: str, operator_en: str, shift: str, r
         )
 
         conn.commit()
+        return True
     except Exception:
         conn.rollback()
         raise
@@ -266,7 +297,12 @@ def finalize_scan(prog_id: str, serial_num: str, operator_en: str, shift: str, d
             "decision": "fail",
         }
 
-    record_packing(serial_num, unit["po_num"], operator_en, shift, remarks)
+    if not record_packing(serial_num, unit["po_num"], operator_en, shift, remarks):
+        return {
+            "status": "already_packed",
+            "message": f"Serial '{serial_num}' was already packed.",
+            "unit": unit,
+        }
     return {
         "status": "ok",
         "message": f"Serial '{serial_num}' packed successfully.",
